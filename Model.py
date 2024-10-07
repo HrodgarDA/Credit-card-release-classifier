@@ -1,119 +1,90 @@
-# Progetto: Previsione dell'affidabilità creditizia per il rilascio della carta di credito
-
-#%% Importazione delle librerie e caricamento dei dati
-import pandas as pd
+# %% 0. IMPORTAZIONE E CARICAMENTO DEI DATI
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-import warnings
-
-
-warnings.filterwarnings('ignore')
+from imblearn.over_sampling import SMOTE
 
 # Caricamento dei dati
-data_path = '/Users/rugg/Documents/GitHub/Credit-card-release-classifier/credit_scoring.csv'
-df = pd.read_csv(data_path)
-print(df.shape)
-df.head()
+credit_path = '/Users/rugg/Documents/GitHub/Credit-card-release-classifier/credit_record.csv'
+application_path = '/Users/rugg/Documents/GitHub/Credit-card-release-classifier/application_record.csv'
+credit_df = pd.read_csv(credit_path)
+application_df = pd.read_csv(application_path)
 
-#%% Esplorazione e pulizia dei dati
-# Informazioni sul dataset
-print(df.info())
+# %% 1. TARGET VARIABLE CREATION
+def categorize_status(status):
+    return 'non-risky' if status in ['X', 'C', '0'] else 'risky'
 
-# Statistiche descrittive
-print(df.describe())
+credit_df['TARGET'] = credit_df['STATUS'].apply(categorize_status)
+target_df = credit_df.groupby('ID')['TARGET'].agg(lambda x: 'risky' if 'risky' in x.values else 'non-risky').reset_index()
 
-# Controllo dei valori nulli
-print(df.isnull().sum())
+dataframe = pd.merge(application_df, target_df, on='ID', how='inner')
+dataframe['TARGET'] = dataframe['TARGET'].map({'risky': 1, 'non-risky': 0})
 
-# Rimozione della colonna 'ID' se presente
-if 'ID' in df.columns:
-    df = df.drop('ID', axis=1)
+# %% 2. PULIZIA E PREPROCESSAMENTO DEI DATI
+dataframe = dataframe.drop(['ID', 'FLAG_MOBIL', 'FLAG_EMAIL'], axis=1)
+dataframe['AGE'] = -dataframe['DAYS_BIRTH'] / 365
+dataframe['YEARS_EMPLOYED'] = -dataframe['DAYS_EMPLOYED'] / 365
+dataframe['INCOME_K'] = dataframe['AMT_INCOME_TOTAL'] / 1000
+dataframe = dataframe.drop(['DAYS_BIRTH', 'DAYS_EMPLOYED', 'AMT_INCOME_TOTAL'], axis=1)
 
-# Conversione delle colonne categoriche
-categorical_columns = df.select_dtypes(include=['object']).columns
-for col in categorical_columns:
-    df[col] = pd.Categorical(df[col]).codes
+# Encoding delle variabili categoriche
+binary_cols = ['CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY']
+for col in binary_cols:
+    dataframe[col] = dataframe[col].map({'Y': 1, 'N': 0, 'F': 0, 'M': 1})
 
-print(df.head())
+education_order = {'Lower secondary': 0, 'Secondary / secondary special': 1, 'Incomplete higher': 2, 'Higher education': 3, 'Academic degree': 4}
+dataframe['NAME_EDUCATION_TYPE'] = dataframe['NAME_EDUCATION_TYPE'].map(education_order)
 
-#%% Analisi esplorativa dei dati (EDA)
-# Distribuzione della variabile target
-plt.figure(figsize=(8, 6))
-df['TARGET'].value_counts().plot(kind='bar')
-plt.title('Distribuzione della variabile Target')
-plt.xlabel('Classe')
-plt.ylabel('Conteggio')
-plt.show()
+dataframe = pd.get_dummies(dataframe, columns=['NAME_INCOME_TYPE', 'NAME_FAMILY_STATUS', 'NAME_HOUSING_TYPE', 'OCCUPATION_TYPE'])
 
-# Matrice di correlazione
-plt.figure(figsize=(12, 10))
-sns.heatmap(df.corr(), annot=True, cmap='coolwarm', linewidths=0.5)
-plt.title('Matrice di correlazione')
-plt.show()
+# %% 3. BILANCIAMENTO DEL DATASET
+X = dataframe.drop('TARGET', axis=1)
+y = dataframe['TARGET']
 
-# Boxplot per alcune variabili numeriche
-numerical_columns = df.select_dtypes(include=[np.number]).columns[:5]  # Selezioniamo le prime 5 colonne numeriche
-plt.figure(figsize=(12, 6))
-df.boxplot(column=numerical_columns)
-plt.title('Boxplot delle variabili numeriche')
-plt.xticks(rotation=45)
-plt.show()
-
-#%% Preparazione dei dati per il modello
-# Divisione in features (X) e target (y)
-X = df.drop('TARGET', axis=1)
-y = df['TARGET']
-
-# Divisione in set di training e test
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# Standardizzazione delle feature
+smote = SMOTE(random_state=42)
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+
+# %% 4. NORMALIZZAZIONE
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
+X_train_scaled = scaler.fit_transform(X_train_balanced)
 X_test_scaled = scaler.transform(X_test)
 
-print("Dimensioni del set di training:", X_train_scaled.shape)
-print("Dimensioni del set di test:", X_test_scaled.shape)
+# %% 5. MODELLO DI RIFERIMENTO (LOGISTIC REGRESSION)
+lr = LogisticRegression(random_state=42)
+lr.fit(X_train_scaled, y_train_balanced)
+y_pred_lr = lr.predict(X_test_scaled)
 
-#%% Creazione e valutazione dei modelli
-def evaluate_model(y_true, y_pred, model_name):
-    print(f"Risultati per {model_name}:")
-    print(f"Accuracy: {accuracy_score(y_true, y_pred):.4f}")
-    print(f"Precision: {precision_score(y_true, y_pred):.4f}")
-    print(f"Recall: {recall_score(y_true, y_pred):.4f}")
-    print(f"F1-score: {f1_score(y_true, y_pred):.4f}")
-    print("Matrice di confusione:")
-    print(confusion_matrix(y_true, y_pred))
-    print("\n")
+print("Logistic Regression Performance:")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_lr):.2f}")
+print(f"Precision: {precision_score(y_test, y_pred_lr):.2f}")
+print(f"Recall: {recall_score(y_test, y_pred_lr):.2f}")
+print(f"F1 Score: {f1_score(y_test, y_pred_lr):.2f}")
 
-# Regressione Logistica
-lr_model = LogisticRegression(random_state=42)
-lr_model.fit(X_train_scaled, y_train)
-lr_pred = lr_model.predict(X_test_scaled)
-evaluate_model(y_test, lr_pred, "Regressione Logistica")
+# %% 6. RANDOM FOREST
+rf = RandomForestClassifier(n_estimators=100, random_state=42)
+rf.fit(X_train_scaled, y_train_balanced)
+y_pred_rf = rf.predict(X_test_scaled)
 
-# Random Forest
-rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-rf_model.fit(X_train_scaled, y_train)
-rf_pred = rf_model.predict(X_test_scaled)
-evaluate_model(y_test, rf_pred, "Random Forest")
+print("\nRandom Forest Performance:")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_rf):.2f}")
+print(f"Precision: {precision_score(y_test, y_pred_rf):.2f}")
+print(f"Recall: {recall_score(y_test, y_pred_rf):.2f}")
+print(f"F1 Score: {f1_score(y_test, y_pred_rf):.2f}")
 
-#%% Interpretazione dei risultati e feature importance
-# Feature importance per Random Forest
-feature_importance = pd.DataFrame({
-    'feature': X.columns,
-    'importance': rf_model.feature_importances_
-}).sort_values('importance', ascending=False)
+# %% 7. FEATURE IMPORTANCE
+feature_importance = pd.DataFrame({'feature': X.columns, 'importance': rf.feature_importances_})
+feature_importance = feature_importance.sort_values('importance', ascending=False).head(10)
 
 plt.figure(figsize=(10, 6))
-sns.barplot(x='importance', y='feature', data=feature_importance.head(10))
-plt.title('Top 10 Feature Importance - Random Forest')
+sns.barplot(x='importance', y='feature', data=feature_importance)
+plt.title('Top 10 Most Important Features')
+plt.tight_layout()
 plt.show()
-
-print(feature_importance.head(10))
