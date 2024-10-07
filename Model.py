@@ -15,7 +15,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Caricamento dei dati
-df = pd.read_csv('Credit score sample data.csv')
+data_path = '/Users/rugg/Documents/GitHub/Credit-card-release-classifier/credit_scoring.csv'
+df = pd.read_csv(data_path)
 print(df.shape)
 df.head()
 
